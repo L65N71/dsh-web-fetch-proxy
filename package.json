@@ -1,7 +1,7 @@
 {
   "name": "dsh-web-fetch-proxy",
   "version": "0.3.0",
-  "description": "DSH 插件：让内置 web_fetch 经由本地代理（Clash/Mihomo 等）出网，绕过 TUN fake-ip 假地址被 SSRF 防护拦截的问题。本副本为本地补丁版：跟随系统代理/TUN 开关，并每 pollMs 重新判定一次，切换无需重启。 / DSH plugin that routes the built-in web_fetch through a local proxy. This local build adds a system-proxy/TUN switch gate plus periodic re-evaluation, so toggling Clash needs no restart. See PATCH.md.",
+  "description": "DSH 插件：让内置 web_fetch 经由本地代理出网，绕过 TUN fake-ip 被 SSRF 防护拦截的问题。Fork 版新增系统代理/TUN 开关闸门与轮询判定，切换无需重启。 / DSH plugin routing web_fetch through a local proxy, with a live system-proxy/TUN switch gate and periodic re-evaluation. See PATCH.md.",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
