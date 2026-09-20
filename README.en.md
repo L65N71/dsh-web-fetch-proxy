@@ -3,6 +3,45 @@
 > A DSH plugin that routes the built-in `web_fetch` through a local proxy, so TUN-mode fake-ip
 > answers stop tripping the provider SSRF guard.
 
+---
+
+## ⚠️ This is a fork — behaviour differs from upstream
+
+Based on [1499501762/dsh-web-fetch-proxy](https://github.com/1499501762/dsh-web-fetch-proxy)
+v0.2.0 (MIT, © Tong317).
+
+Upstream decides **once, at boot** whether to use a proxy, and it does so whenever *any* local
+proxy port answers. This fork changes two things so that switching a VPN client's own toggles
+takes effect **live**, and so the plugin **respects those toggles**:
+
+| | Upstream v0.2.0 | This fork v0.3.0 |
+|---|---|---|
+| When it decides | once, at boot | **every `pollMs` (default 5 s)** |
+| Decision input | any reachable proxy port | **only while the Windows system proxy or Clash TUN is on** (`trigger` switches back) |
+| Clash turned off | keeps a dead route → every `web_fetch` fails | **releases the route → falls back to direct** |
+| Restart needed? | manual "re-detect" after switching | **no** |
+
+It also fixes a failure upstream does not surface: upstream builds its host-module resolution
+anchors from `env.DSH_HOME`, but **the host process does not export `DSH_HOME` to its own
+environment** (it is only injected into the shells it spawns), so on some install layouts the
+plugin reports `cannot import @deepseek-ai/dsh-http-proxy`. This fork adds `~/.dsh` and
+`NODE_PATH` fallback anchors.
+
+**Full design notes, behaviour matrix and live verification: [`PATCH.md`](./PATCH.md)** (Chinese).
+`trigger: "reachable"` + `pollMs: 0` restores upstream semantics.
+
+Install this fork:
+
+```sh
+dsh plugin --profile web add github:L65N71/dsh-web-fetch-proxy
+```
+
+> The section below is upstream's original English documentation. It describes upstream v0.2.0
+> behaviour; read `PATCH.md` for what this fork changes. The Chinese [`README.md`](./README.md)
+> is the maintained one.
+
+---
+
 ## Symptom
 
 On Windows with a TUN-mode proxy client running (Clash Verge / Mihomo, sing-box, Surge), every
@@ -50,7 +89,7 @@ fetch after   : ok, 200, 1046 chars
 ## Install
 
 ```bash
-dsh plugin --profile web add github:1499501762/dsh-web-fetch-proxy
+dsh plugin --profile web add github:L65N71/dsh-web-fetch-proxy
 # or, from a local checkout:
 dsh plugin --profile web add link:<absolute-path-to-this-package>
 ```
@@ -58,7 +97,7 @@ dsh plugin --profile web add link:<absolute-path-to-this-package>
 Restart DSH. A working boot logs:
 
 ```
-[web-fetch-proxy] web_fetch now tunnels through http://127.0.0.1:7897 (source: clash-config:...); the local DNS check is bypassed.
+[web-fetch-proxy] web_fetch 现在经由 http://127.0.0.1:7897 出网（来源：clash-config:...）；本地 DNS 校验已被代理路由跳过。
 ```
 
 ## Settings page

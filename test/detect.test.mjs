@@ -10,9 +10,12 @@ import {
   isReachable,
   normalizeProxyUrl,
   parseMixedPort,
+  parseNestedFlag,
+  parseTopLevelFlag,
   parseWindowsProxyServer,
   probeTcp,
   readClashMixedPort,
+  readClashTunEnabled,
   readEnvProxy,
   stripQuotes,
 } from "../lib/detect.js";
@@ -144,4 +147,118 @@ test("discoverProxy falls through environment, clash config and the port probe",
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("parseTopLevelFlag reads only unindented switches", () => {
+  assert.equal(parseTopLevelFlag("enable_tun_mode: true\n", "enable_tun_mode"), true);
+  assert.equal(parseTopLevelFlag("enable_tun_mode: false\n", "enable_tun_mode"), false);
+  assert.equal(parseTopLevelFlag("tun:\n  enable_tun_mode: true\n", "enable_tun_mode"), undefined);
+  assert.equal(parseTopLevelFlag("# enable_tun_mode: true\n", "enable_tun_mode"), undefined);
+  assert.equal(parseTopLevelFlag(undefined, "enable_tun_mode"), undefined);
+});
+
+test("parseNestedFlag reads a block scalar and stops at the block edge", () => {
+  const text = "mixed-port: 7897\ntun:\n  enable: true\n  stack: gvisor\nsecret: x\n";
+  assert.equal(parseNestedFlag(text, "tun", "enable"), true);
+  assert.equal(parseNestedFlag("tun:\n  enable: false\n", "tun", "enable"), false);
+  // an `enable` that appears after the block ended must not be picked up
+  assert.equal(parseNestedFlag("tun:\n  stack: gvisor\nenable: true\n", "tun", "enable"), undefined);
+  assert.equal(parseNestedFlag("dns:\n  enable: true\n", "tun", "enable"), undefined);
+});
+
+test("readClashTunEnabled prefers the UI switch, then the runtime block", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-wfp-tun-"));
+  try {
+    const verge = path.join(dir, "verge.yaml");
+    const runtime = path.join(dir, "config.yaml");
+    const missing = path.join(dir, "nope.yaml");
+
+    fs.writeFileSync(verge, "tun_tray_icon: false\nenable_tun_mode: true\n", "utf8");
+    assert.equal(readClashTunEnabled({ files: [verge] }), true);
+
+    fs.writeFileSync(verge, "enable_tun_mode: false\n", "utf8");
+    assert.equal(readClashTunEnabled({ files: [verge] }), false);
+
+    fs.writeFileSync(runtime, "tun:\n  enable: true\n  stack: gvisor\n", "utf8");
+    assert.equal(readClashTunEnabled({ files: [runtime] }), true);
+
+    assert.equal(readClashTunEnabled({ files: [missing] }), undefined);
+    assert.equal(readClashTunEnabled({ files: [missing, runtime] }), true);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the UI switch beats a stale generated runtime block", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-wfp-stale-"));
+  try {
+    const verge = path.join(dir, "verge.yaml");
+    const runtime = path.join(dir, "config.yaml");
+    // The real Clash Verge shape: verge.yaml flips immediately, config.yaml lags behind.
+    fs.writeFileSync(verge, "enable_tun_mode: true\nenable_system_proxy: false\n", "utf8");
+    fs.writeFileSync(runtime, "tun:\n  enable: false\n  stack: gvisor\n", "utf8");
+    assert.equal(readClashTunEnabled({ files: [verge, runtime] }), true);
+
+    // And the reverse direction: switching off must not be overridden by a stale block.
+    fs.writeFileSync(verge, "enable_tun_mode: false\n", "utf8");
+    fs.writeFileSync(runtime, "tun:\n  enable: true\n", "utf8");
+    assert.equal(readClashTunEnabled({ files: [verge, runtime] }), false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+/** Discover options with both switch readers pinned, so the gate never reads the host. */function gateOptions(extra) {
+  return Object.assign({
+    explicit: "auto",
+    env: {},
+    clashOptions: NO_CLASH_FILES,
+    readSystemProxy: () => undefined,
+    ports: [7897],
+    reachable: async (url) => url === "http://127.0.0.1:7897",
+  }, extra);
+}
+
+test("the toggles trigger keeps web_fetch direct while both switches are off", async () => {
+  const hit = await discoverProxy(gateOptions({ trigger: "toggles" }));
+  assert.equal(hit.gated, true);
+  assert.match(hit.reason, /直连/);
+});
+
+test("the toggles trigger opens for the Windows system proxy", async () => {
+  const hit = await discoverProxy(gateOptions({
+    trigger: "toggles",
+    readSystemProxy: () => ({ url: "http://127.0.0.1:7897", source: "windows-registry" }),
+  }));
+  assert.equal(hit.url, "http://127.0.0.1:7897");
+  assert.equal(hit.gated, undefined);
+});
+
+test("the toggles trigger opens for Clash TUN mode", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-wfp-gate-"));
+  try {
+    const runtime = path.join(dir, "config.yaml");
+    fs.writeFileSync(runtime, "mixed-port: 7897\ntun:\n  enable: true\n", "utf8");
+    const hit = await discoverProxy(gateOptions({ trigger: "toggles", clashOptions: { files: [runtime] } }));
+    assert.equal(hit.url, "http://127.0.0.1:7897");
+    assert.ok(hit.source.startsWith("clash-config:"));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("explicit intent ignores the gate", async () => {
+  const fromEnv = await discoverProxy(gateOptions({
+    trigger: "toggles",
+    env: { HTTPS_PROXY: "http://127.0.0.1:7897" },
+  }));
+  assert.equal(fromEnv.source, "env:HTTPS_PROXY");
+
+  const explicit = await discoverProxy(gateOptions({ trigger: "toggles", explicit: "127.0.0.1:7897" }));
+  assert.equal(explicit.source, "config");
+});
+
+test("trigger reachable keeps the legacy always-discover behaviour", async () => {
+  const hit = await discoverProxy(gateOptions({ trigger: "reachable" }));
+  assert.deepEqual(hit, { url: "http://127.0.0.1:7897", source: "port-probe:7897" });
 });

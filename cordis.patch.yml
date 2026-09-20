@@ -5,7 +5,25 @@
 # 从而跳过 web-fetch-http 的本地 DNS 校验（TUN fake-ip 场景）。
 #
 # 安装：dsh plugin --profile web add link:<path-to-this-package>
-# 可选配置见 README（config.proxy / config.noProxy / config.retryMs）。
+# 这里是部署级基线与默认值；proxy / noProxy / trigger 可在
+# 设置 -> 常规 -> Web Fetch 代理 里实时覆盖。
 - insert:
     - id: web-fetch-proxy
       name: dsh-web-fetch-proxy
+      config:
+        # false 则完全不介入（本插件的总开关）
+        enabled: true
+        # auto = 自动发现；off = 从不安装；也可写死 http://host:port
+        proxy: auto
+        # 追加的不走代理的域名，逗号分隔
+        noProxy: ''
+        # toggles   = 只有「Windows 系统代理」或「Clash TUN」开着时才走代理（默认，推荐）
+        # reachable = 只要本机有代理端口在监听就走代理（上游原行为）
+        trigger: toggles
+        # 轮询间隔（毫秒）：重新评估上面的判断，实现开关切换的实时生效。0 = 关闭轮询
+        pollMs: 5000
+        # 下面两个仅在 pollMs: 0 时有意义；轮询开启时由轮询承担重试，单次只探测一次
+        retryMs: 15000
+        maxRetries: 20
+        # 单个候选代理的 TCP 探测超时
+        probeTimeoutMs: 400

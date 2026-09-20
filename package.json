@@ -1,7 +1,7 @@
 {
   "name": "dsh-web-fetch-proxy",
-  "version": "0.2.0",
-  "description": "DSH 插件：让内置 web_fetch 经由本地代理（Clash/Mihomo 等）出网，绕过 TUN fake-ip 假地址被 SSRF 防护拦截的问题。 / DSH plugin that routes the built-in web_fetch through a local proxy, so TUN fake-ip addresses stop tripping the SSRF guard.",
+  "version": "0.3.0",
+  "description": "DSH 插件：让内置 web_fetch 经由本地代理（Clash/Mihomo 等）出网，绕过 TUN fake-ip 假地址被 SSRF 防护拦截的问题。本副本为本地补丁版：跟随系统代理/TUN 开关，并每 pollMs 重新判定一次，切换无需重启。 / DSH plugin that routes the built-in web_fetch through a local proxy. This local build adds a system-proxy/TUN switch gate plus periodic re-evaluation, so toggling Clash needs no restart. See PATCH.md.",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -17,6 +17,7 @@
     "lib",
     "scripts",
     "cordis.patch.yml",
+    "PATCH.md",
     "README.md",
     "README.en.md",
     "CHANGELOG.md",
@@ -39,18 +40,21 @@
     "网络代理"
   ],
   "license": "MIT",
-  "author": "Tong317 <1499501762@users.noreply.github.com>",
+  "author": "L65N71",
+  "contributors": [
+    "Tong317 <1499501762@users.noreply.github.com> (original work, v0.2.0)"
+  ],
   "engines": {
     "node": ">=20.18.1"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/1499501762/dsh-web-fetch-proxy.git"
+    "url": "git+https://github.com/L65N71/dsh-web-fetch-proxy.git"
   },
   "bugs": {
-    "url": "https://github.com/1499501762/dsh-web-fetch-proxy/issues"
+    "url": "https://github.com/L65N71/dsh-web-fetch-proxy/issues"
   },
-  "homepage": "https://github.com/1499501762/dsh-web-fetch-proxy#readme",
+  "homepage": "https://github.com/L65N71/dsh-web-fetch-proxy#readme",
   "peerDependencies": {
     "@deepseek-ai/dsh-http-proxy": ">=0.1.5-rc.2",
     "@deepseek-ai/dsh-launch-environment": ">=0.1.5-rc.2",

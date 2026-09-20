@@ -4,6 +4,38 @@
 
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
+---
+
+## ⚠️ 本仓库是 Fork，行为与上游不同
+
+基于 [1499501762/dsh-web-fetch-proxy](https://github.com/1499501762/dsh-web-fetch-proxy) v0.2.0（MIT，© Tong317）修改。
+
+上游在**启动时决定一次**"是否走代理"，且判断依据是"本机有没有可达的代理端口"。
+本 Fork 改了两件事，让开关切换**实时生效**、并且**尊重代理客户端自己的开关**：
+
+| | 上游 v0.2.0 | 本 Fork v0.3.0 |
+|---|---|---|
+| 判定时机 | 启动时一次 | **每 `pollMs`（默认 5 秒）重新判定** |
+| 判定依据 | 代理端口可达即启用 | **只在 Windows 系统代理或 Clash TUN 开着时才启用**（`trigger` 可切回上游行为） |
+| Clash 关掉后 | 保留死路由 → `web_fetch` 全部失败 | **自动释放路由 → 回退直连** |
+| 需要重启？ | 切换后需要手动「重新检测」 | **不需要** |
+
+此外修复了一个上游未暴露的故障：上游从 `env.DSH_HOME` 构造宿主模块解析锚点，
+而**宿主进程自己的 `process.env` 里没有 `DSH_HOME`**（它只注入给派生的 shell），
+导致插件在部分安装布局下报 `cannot import @deepseek-ai/dsh-http-proxy`。
+本 Fork 增加了 `~/.dsh` 与 `NODE_PATH` 两条回退锚点。
+
+**完整改动说明、行为矩阵、实测记录见 [`PATCH.md`](./PATCH.md)。**
+`trigger: "reachable"` + `pollMs: 0` 可退回上游语义。
+
+安装（本 Fork）：
+
+```sh
+dsh plugin --profile web add github:L65N71/dsh-web-fetch-proxy
+```
+
+---
+
 ## 症状
 
 在开着 TUN 模式代理（Clash Verge / Mihomo、sing-box、Surge 等）的 Windows 上，DSH 的 `web_fetch` 对所有域名都失败，
@@ -115,23 +147,54 @@ fetch after   : ok, 200, 1046 chars
 
 ## 安装
 
+### 从 GitHub 安装（推荐）
+
+```bash
+dsh plugin --profile web add github:L65N71/dsh-web-fetch-proxy
+```
+
+本仓库已提交**预构建的 `lib/`**，且 `package.json` 里没有 `prepare` 脚本，
+因此 pnpm 不会触发构建，**不需要** `allowBuilds` 授权。
+
 ### 本地目录（开发 / 私有插件）
 
 ```bash
-git clone https://github.com/1499501762/dsh-web-fetch-proxy.git
+git clone https://github.com/L65N71/dsh-web-fetch-proxy.git
 dsh plugin --profile web add link:<仓库绝对路径>
 ```
 
-### 从 GitHub 安装
+> ⚠️ `link:` 装法只在 profile 的 `node_modules` 里建一个 **Junction 指向源目录，不复制文件**。
+> 源目录一旦被删或移动，链接就悬空，插件下次启动加载不到。想删源目录请改用下面的 tarball 方式。
+
+### 本地 tarball（离线 / 内部分发）
 
 ```bash
-dsh plugin --profile web add github:1499501762/dsh-web-fetch-proxy
+cd <仓库目录>
+pnpm pack                                          # 产出 dsh-web-fetch-proxy-0.3.0.tgz
+dsh plugin --profile web add <tgz 绝对路径>
 ```
 
-安装后重启 DSH。启动日志里出现下面这行就说明生效了：
+tarball 会被**解包进 profile 自己的 `node_modules\.pnpm\`**，源目录随后可以删。
+删之前请确认它真的自包含了：
+
+```powershell
+Get-Item "$env:USERPROFILE\.dsh\profiles\web\node_modules\dsh-web-fetch-proxy" | Select-Object LinkType,Target
+# 期望 Target 指向 ...\node_modules\.pnpm\...，而不是你的源目录
+```
+
+### 安装后
+
+**重启 `dsh web`**（首次装载必须重启；之后所有开关切换都不需要）。
+启动日志里出现下面这行就说明生效了：
 
 ```
-[web-fetch-proxy] web_fetch now tunnels through http://127.0.0.1:7897 (source: clash-config:...); the local DNS check is bypassed.
+[web-fetch-proxy] web_fetch 现在经由 http://127.0.0.1:7897 出网（来源：clash-config:...）；本地 DNS 校验已被代理路由跳过。
+```
+
+若当时两个开关都关着，则会是：
+
+```
+[web-fetch-proxy] Windows 系统代理与 Clash TUN 均为关闭状态，web_fetch 保持直连。
 ```
 
 > 注意：本插件的 `cordis.patch.yml` 已经声明了插入行，`dsh plugin add` 会把它写进 profile 的 bundles。
@@ -142,6 +205,18 @@ dsh plugin --profile web add github:1499501762/dsh-web-fetch-proxy
 >     - id: web-fetch-proxy
 >       name: dsh-web-fetch-proxy
 > ```
+
+## 快速开始（默认配置即可用）
+
+装完重启就完事了，**不需要任何配置**。默认行为是：
+
+| 你的操作 | 插件行为 | 生效延迟 |
+|---|---|---|
+| 开着系统代理或 TUN | `web_fetch` 走代理（`phase: ready`） | ≤ 5 秒 |
+| 关掉两个开关（Clash 内核还在跑） | `web_fetch` 直连（`phase: idle`） | ≤ 5 秒 |
+| 完全退出 Clash | `web_fetch` 直连（无路由） | ≤ 5 秒 |
+
+切换开关**不需要重启 DSH**，也不需要点「重新检测」——插件每 5 秒自己重新判定一次。
 
 ## 配置页面
 
@@ -157,11 +232,23 @@ dsh plugin --profile web add github:1499501762/dsh-web-fetch-proxy
 状态行显示的是宿主真正生效的结果，例如：
 
 ```
-已生效  http://127.0.0.1:7897  (via: clash-config:C:\Users\...\config.yaml)
+已生效  http://127.0.0.1:7897  (via: clash-config:%APPDATA%\io.github.clash-verge-rev.clash-verge-rev\config.yaml)
 ```
 
 页面读的是一个带围栏的只读接口 `POST /web-fetch-proxy/api`（仅接受 loopback / 受信 Host、同源请求）：
 请求体 `{"action":"status"}` 取状态，`{"action":"redetect"}` 触发一次重新探测。
+
+**不需要开 GUI 也能查同一个接口**（不需要 GUI token）：
+
+```powershell
+(Invoke-WebRequest 'http://127.0.0.1:3080/web-fetch-proxy/api' -Method POST `
+  -Body '{"action":"status"}' -ContentType 'application/json' `
+  -Headers @{Origin='http://127.0.0.1:3080'} -UseBasicParsing).Content
+```
+
+> ⚠️ **设置页只能改 `proxy` / `noProxy`。** 本 Fork 新增的 `trigger` 与 `pollMs`
+> 属于部署级配置，页面没有暴露，只能写在 `cordis.patch.yml` 的 `config` 里（见下一节）。
+> 需要临时强制走代理时，可以在页面上切到「手动代理」并填地址——显式地址会**绕过闸门**。
 
 > 页面不需要「重启后生效」：设置走的是 `applies: live` 的 settings 命名空间，改动通过
 > `scope.watch()` 直接驱动路由重建（旧的策略先释放，再按新配置重新探测安装）。
@@ -178,9 +265,11 @@ dsh plugin --profile web add github:1499501762/dsh-web-fetch-proxy
       config:
         enabled: true        # false 则完全不介入
         proxy: auto          # auto | off | http://host:port | host:port
-        noProxy: ""          # 额外的不走代理的域名，逗号分隔
-        retryMs: 15000       # 自动发现失败后的重试间隔，0 = 不重试
-        maxRetries: 20       # 最大重试次数
+        noProxy: ''          # 额外的不走代理的域名，逗号分隔
+        trigger: toggles     # toggles = 跟系统代理/TUN 开关 | reachable = 代理可达即启用（上游行为）
+        pollMs: 5000         # 重新判定间隔（毫秒），0 = 关闭轮询
+        retryMs: 15000       # 仅 pollMs: 0 时有意义
+        maxRetries: 20       # 仅 pollMs: 0 时有意义
         probeTimeoutMs: 400  # 单个候选代理的 TCP 探测超时
 ```
 
@@ -189,14 +278,35 @@ dsh plugin --profile web add github:1499501762/dsh-web-fetch-proxy
 | `enabled` | boolean | `true` | 部署级总开关；`false` 时插件不安装任何路由（页面无法覆盖） |
 | `proxy` | string | `auto` | `auto` 自动发现；`off`/`none`/`direct` 不安装；也可以写死代理地址。**页面可改** |
 | `noProxy` | string | `""` | 追加到绕过列表（`localhost`、`127.0.0.1`、`::1` 由 dsh-http-proxy 强制绕过）。**页面可改** |
-| `retryMs` | number | `15000` | 代理客户端比 DSH 晚启动时，按此间隔重试 |
-| `maxRetries` | number | `20` | 重试上限（约 5 分钟） |
+| `trigger` | string | `toggles` | **本 Fork 新增。** `toggles` = 只有 Windows 系统代理或 Clash TUN 开着才走代理；`reachable` = 上游行为（本机有可达的代理端口就启用） |
+| `pollMs` | number | `5000` | **本 Fork 新增。** 重新评估整条决策的间隔（毫秒）。`0` = 关闭轮询，退回上游的"启动时决定一次" |
+| `retryMs` | number | `15000` | 自动发现失败后的重试间隔。**仅在 `pollMs: 0` 时生效**——轮询开启时由轮询承担重试 |
+| `maxRetries` | number | `20` | 重试上限（约 5 分钟）。同样**仅在 `pollMs: 0` 时生效** |
 | `probeTimeoutMs` | number | `400` | 候选代理的 TCP 连接超时 |
 
-也可以直接用环境变量指定，优先级高于自动发现：
+也可以直接用**环境变量**指定代理地址（优先级高于自动发现，且**绕过闸门**）：
 
 ```bash
 set DSH_WEB_FETCH_PROXY=http://127.0.0.1:7897
+```
+
+### 三种典型配置
+
+```yaml
+# ① 默认（推荐）：实时跟随开关，关掉 Clash 自动直连
+trigger: toggles
+pollMs: 5000
+
+# ② 退回上游行为：只要有代理端口就启用，启动时决定一次
+trigger: reachable
+pollMs: 0
+retryMs: 15000
+maxRetries: 20
+
+# ③ 写死代理、永不自动切换（配合页面上选「手动代理」使用）
+proxy: 'http://127.0.0.1:7897'
+trigger: reachable
+pollMs: 0
 ```
 
 ## 代理发现顺序
@@ -205,12 +315,64 @@ set DSH_WEB_FETCH_PROXY=http://127.0.0.1:7897
 
 1. `DSH_WEB_FETCH_PROXY` 环境变量；
 2. `HTTPS_PROXY` / `https_proxy` / `HTTP_PROXY` / `http_proxy` / `ALL_PROXY` / `all_proxy`；
+
+   > **↑ 1–2 视为用户明确意图，绕过闸门。以下 3–5 属于"隐式发现"，只有闸门打开时才执行。**
+
 3. 本地 Clash / Mihomo / Clash Verge 配置里的 `mixed-port`
    （`%APPDATA%\io.github.clash-verge-rev.clash-verge-rev\config.yaml` 等 8 个已知路径）；
 4. Windows WinINET 系统代理（`HKCU\...\Internet Settings`，即系统代理开关打开时的设置）；
 5. 常见端口 TCP 探测：7897、7890、7891、7899、10809、10808、1080、2080、20171、8889。
 
 任何候选都必须先通过 TCP 探测，避免把路由指向一个没在运行的代理。
+
+### 闸门（`trigger: toggles`）
+
+执行 3–5 之前先判断：**Windows 系统代理已开启，或 Clash TUN 已开启**？
+
+- 是 → 继续发现并安装路由；
+- 否 → 直接返回"保持直连"，**不安装任何路由**（`phase: idle`）。
+
+TUN 状态的读法有两遍：先在所有已知配置文件里找 Clash Verge 的 UI 开关
+（`verge.yaml` → `enable_tun_mode`），找不到才回退到生成的运行时段
+（`config.yaml` → `tun.enable`）。**UI 开关优先**，因为它立即更新，
+而 `config.yaml` 在切换 TUN 后可能仍是陈旧的 `tun.enable: false`。
+
+### 行为矩阵
+
+| Clash 状态 | 判定依据 | `phase` | `web_fetch` |
+|---|---|---|---|
+| 完全退出 | 端口探测失败 | `error` | 直连 |
+| 系统代理 开 | WinINET `ProxyEnable=1` | `ready` | 走代理 |
+| TUN 开 | `verge.yaml` 的 `enable_tun_mode` | `ready` | 走代理 |
+| 两个都关（内核仍在跑） | 闸门关闭 | `idle` | **直连** |
+| 页面上填了「手动代理」地址 | 显式意图，绕过闸门 | `ready` | 走代理 |
+| 设置了 `HTTPS_PROXY` 等环境变量 | 显式意图，绕过闸门 | `ready` | 走代理 |
+
+## 排查
+
+**第一步永远是看状态接口**（命令见「配置页面」一节）。`phase` 的含义：
+
+| `phase` | 含义 | 怎么办 |
+|---|---|---|
+| `ready` | 路由已装好 | 正常。看 `url` / `source` 确认地址 |
+| `idle` | 系统代理与 TUN 都没开，按设计保持直连 | 正常。要用代理就开其中一个开关 |
+| `error` | 开关开了，但找不到可达的本地代理 | 确认代理客户端在跑、端口对得上；或在页面上切「手动代理」填地址 |
+| `unavailable` | **加载宿主模块失败**，插件完全没生效 | `message` 里现在带真实错误。常见是 DSH 安装布局变化，见下 |
+| `disabled` | 配置为关闭（`enabled: false` 或 `proxy: off`） | 正常 |
+
+**`unavailable` 的典型原因**：宿主进程的 `process.env` 里**没有 `DSH_HOME`**
+（它只被注入给派生的 shell），而上游只从 `DSH_HOME` 构造解析锚点。
+本 Fork 已增加 `~/.dsh` 与 `NODE_PATH` 两条回退，正常安装布局下不会再出现。
+若仍出现，把 `message` 里的完整错误贴出来——它会指明是哪个锚点、什么错误码。
+
+**只读诊断**（不安装任何路由，可随时运行）：
+
+```powershell
+cd <仓库目录>
+node scripts/gate-check.mjs
+```
+
+它会打印找到哪些 Clash 配置文件、两个开关各是什么、以及当前判定。
 
 ## 与 dsh-network-proxy 的关系
 
